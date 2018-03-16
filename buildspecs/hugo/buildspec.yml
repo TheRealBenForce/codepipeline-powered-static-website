@@ -1,14 +1,18 @@
 version: 0.1
 
-# This buildspec.yml can be built using the AWS managed codebuild image
-# - aws/codebuild/ubuntu-base:14.04 or any other image that runs ubuntu
-# and the aws sdk
+# This buildspec.yml can be built using the AWS managed codebuild image - aws/codebuild/ubuntu-base:14.04
 
+# NOTE: Ensure that your required source directories are present so hugo can correctly build the website.
+# required directories for hugo include:
+# archetypes, content, layouts, static, data
+# If they do not have any data, just add a .gitkeep file that's empty insite the git directory.
 phases:
   install:
     commands:
       # Add any other custom build commands here
-      - apt-get install -y hugo
+      - wget https://github.com/gohugoio/hugo/releases/download/v0.37.1/hugo_0.37.1_Linux-64bit.deb
+      - dpkg -i hugo_0.37.1_Linux-64bit.deb
+
   build:
     commands:
       - echo "******** Building your hugo website ********"
