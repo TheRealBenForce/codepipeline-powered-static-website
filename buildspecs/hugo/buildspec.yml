@@ -1,0 +1,18 @@
+version: 0.1
+
+# This buildspec.yml can be built using the AWS managed codebuild image
+# - aws/codebuild/ubuntu-base:14.04 or any other image that runs ubuntu
+# and the aws sdk
+
+phases:
+  install:
+    commands:
+      # Add any other custom build commands here
+      - apt-get install -y hugo
+  build:
+    commands:
+      - echo "******** Building your hugo website ********"
+      - hugo
+      - echo "******** Updating your hugo website at s3 bucket ********"
+      - echo "$TARGET_S3_BUCKET"
+      - aws s3 sync public/ $TARGET_S3_BUCKET

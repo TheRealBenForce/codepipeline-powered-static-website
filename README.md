@@ -1,11 +1,24 @@
 
-# Git-backed static website powered entirely by AWS
+# Code-pipeline powered static website serverless, and powered entirely by AWS
 
-![diagram](https://raw.githubusercontent.com/alestic/aws-git-backed-static-website/master/aws-git-backed-static-website-architecture.gif "Architecture dagram: Git-backed static website powerd by AWS")
+This is a fork of Eric Hammond's great implementation for infrastructure to build static websites on s3: [aws-git-backed-static-website]: https://github.com/alestic/aws-git-backed-static-website.
+It has the following modifications:
 
-[![Launch CloudFormation stack][2]][1]
-[1]: https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?templateURL=https:%2F%2Fs3.amazonaws.com%2Frun.alestic.com%2Fcloudformation%2Faws-git-backed-static-website-cloudformation.yml&stackName=aws-git-backed-static-website
-[2]: https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png 
+1. The approach uses lambda functions rather than AWS's CodeBuild service to generate the site and push it to production. We found that one of the lambda functions provided in the template did not work. (See [this github issue](https://github.com/alestic/aws-git-backed-static-website/issues/9) which seems to have since be resolved for more details.)
+We replaced the lambda functions with a CodeBuild stage.
+
+2.  We also found that the permissions for S3 buckets created in the stack did not seem to allow the contents to be served publicly. We  therefore added a bucket policy to the S3 bucket.
+
+3.  CodeBuild seemed to more naturally fit the process of building these sites than lambda functions. 
+
+4. We also wanted to allow users to connect their GitHub repositories with the Source step of our pipeline. 
+
+
+[![Launch CloudFormation stack][launching]][launch]
+
+[launching]: https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png
+
+[launch]: https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?templateURL=https:%2F%2Fs3.amazonaws.com%2Felementryx-open-source%2Fcodepipeline-powered-static-website-cloudformation.yml&stackName=codepipeline-powered-static-website
 
 ## Overview
 
@@ -14,16 +27,16 @@ Git repository and a static https website, along with the necessary
 AWS infrastructure glue so that every change to content in the Git
 repository is automatically deployed to the static web site.
 
-The website can serve the exact contents of the Git repository, or a
-static site generator plugin (e.g., Hugo) can be specified on launch
-to automatically generate the site content from the source in the Git
-repository.
+The website can serve the exact contents of the Git repository, or 
+a static site generator plugin (e.g., Hugo) can be specified to automatically generate the site content from the source in the Git
+repository. The codebuild.yml file instructs the created CodeBuild
+project how to build the static file in question.
 
 The required stack parameters are a domain name and an email address.
 
 The primary output values are a list of nameservers to set in your
-domain's registrar and a Git repository URL for adding and updating
-the website content.
+domain's registrar and a CodeCommit git URL if you are not connecting an
+existing GitHub repository for adding and updating the website content.
 
 Git repository event notifications are sent to an SNS topic and your
 provided email address is initially subscribed.
@@ -49,39 +62,81 @@ Benefits of this architecture include:
 
 ## Create CloudFormation stack for static website
 
-This CloudFormation stack has an AWS Lambda plugin architecture that
-supports arbitrary static site generators. Here are some generator
-plugins that are currently available
+This CloudFormation stack has an CodeBuild buildspec.yml plugin
+architecture that supports arbitrary static site generators. The 
+generator buildspec.yml's currently available are in the buildspecs/ directory.
+Ensure that the buildspec in use is compatible with the BuildEnvironmentImage
+specified when creating the stack. Default Ruby environment is used to support
+Ruby based static site generators like Jekyll. 
 
-1. [Identity transformation plugin][identity] - This copies the entire Git
+1. Identity transformation plugin - This copies the entire Git
    repository content to the static website with no
-   modifications. This is currently the default plugin for the static
-   website CloudFormation template.
+   modifications.
 
-2. [Subdirectory plugin][subdirectory] - This plugin is useful if your
+2. Subdirectory plugin - This plugin is useful if your
    Git repository has files that should not be included as part of the
    static site. It publishes a specified subdirectory (e.g., "htdocs"
    or "public-html") as the static website, keeping the rest of your
    repository private.
 
-3. [Hugo plugin][hugoplugin] - This plugin runs the popular
+3. Hugo Plugin - This plugin runs the popular
    [Hugo][hugo] static site generator. The Git repository should
    include all source templates, content, theme, and config.
 
-You are welcome to make your own static site generators based on one
-of these and pass it into the CloudFormation stack.
+4. Jekyll plugin - This plugin runs the popular
+   [Jekyll][jekyll] static site generator. The Git repository should
+   include all source templates, content, theme, and config.
 
-[identity]: https://github.com/alestic/aws-lambda-codepipeline-site-generator-identity
-[subdirectory]: https://github.com/alestic/aws-lambda-codepipeline-site-generator-subdirectory
-[hugoplugin]: https://github.com/alestic/aws-lambda-codepipeline-site-generator-hugo
+You are welcome to make your own buildspec.yml based on these
+of these and place it at the root of your static site project. If you feel like other people might like to use it, feel free to contribute it back.
+
+[jekyll]: https://jekyllrb.com/
 [hugo]: https://gohugo.io/
+
+
+## Setting up your first static site generator pipeline using Git
+**Step 1**:
+Fork  [our sample website source repository](https://github.com/elementryx/YAX-Coming-soon-Jekyll-codebuild-template) on GitHub or place the relevant buildspec.yml from the **buildspecs/** folder into your existing static website repository.
+
+**Step 2**:
+
+
+Follow the steps [provided by GitHub](https://help.github.com/articles/creating-a-personal-access-token-for-the-command-line/) to create a OAuth token from GitHub and make sure to include the scopes [*repo* and *admin:repo_hook*](https://docs.aws.amazon.com/codepipeline/latest/userguide/troubleshooting.html#troubleshooting-gs2) . Copy this OAuth token.
+
+**Step 3**:
+Open this [this wizard](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?templateURL=https:%2F%2Fs3.amazonaws.com%2Felementryx-open-source%2Fcodepipeline-powered-static-website-cloudformation.yml&stackName=codepipeline-powered-static-website) to enable you to launch your stack. Click next.
+
+**Step 4**:
+Set the following fields:
+
+  DomainName = "your.blogdomain.com"
+  SourceType = "GitHub"
+  BranchName = "master"
+  GithubRepoOwner = "yourgithubname"
+  GithubRepoName = "codepipeline-powered-static-website"
+  GithubOauthToken ="yourPastedOauthTokenFromStep2"
+  NotificationEmail = "your@email-address.com"
+  
+If your domain is managed by AWS and you have an existing hosted zone, you should enter your pre-existing hosted zone.
+
+  PreExistingHostedZoneDomain = "your.blogdomain.com"
+
+**Step 5:**
+Click **Next** > Click **Next** > check the box that reads **I acknowledge that AWS CloudFormation might create IAM resources.** > Click **Create**
+ 
+**Step 6:**
+When you receive emails from AWS requesting confirmation that you own the domain when CloudFormation is creating your SSL certificate, confirm that you want to allow AWS to create the certificate.
+ 
+**Step 7:**
+Wait, for about an hour, the cloudfront distributions will be ready to serve your website.  Simply copy the outputted DNS servers and set nameservers in your domain registrar to the above.
+
 
 ## Create CloudFormation stack for static website
 
 Here is the basic approach to creating the stack with CloudFormation.
 
     domain=example.com
-    email=yourrealemail@anotherdomain.com
+    email=yourrealemail@adomain.com
 
     template=aws-git-backed-static-website-cloudformation.yml
     stackname=${domain/./-}-$(date +%Y%m%d-%H%M%S)
@@ -99,11 +154,10 @@ Here is the basic approach to creating the stack with CloudFormation.
     echo region=$region stackname=$stackname
 
 The above defaults to the Identity transformation plugin. You can
-specify the Hugo static site generator plugin by adding these
-parameters:
+specify that a ruby environment is to be used like this:
 
-        "ParameterKey=GeneratorLambdaFunctionS3Bucket,ParameterValue=run.alestic.com" \
-        "ParameterKey=GeneratorLambdaFunctionS3Key,ParameterValue=lambda/aws-lambda-site-generator-hugo.zip"
+        "ParameterKey=BuildEnvironmentImage,ParameterValue=aws/codebuild/ruby:2.3.1" 
+
 
 When the stack starts up, two email messages will be sent to the
 address associated with your domain's registration and one will be
@@ -114,7 +168,7 @@ sent to your AWS account address. Open each email and approve these:
 
 The CloudFormation stack will be stuck until the ACM certificates are
 approved. The CloudFront distributions are created afterwards and can
-take over 30 minutes to complete.
+take well over 30 minutes to complete.
 
 ### Get the name servers for updating in the registrar
 
@@ -132,7 +186,7 @@ take over 30 minutes to complete.
 
 Set nameservers in your domain registrar to the above.
 
-### Get the Git clone URL
+### Get the Git clone URL (if you are using CodeCommit)
 
     git_clone_url_http=$(aws cloudformation describe-stacks \
       --region "$region" \
@@ -140,6 +194,19 @@ Set nameservers in your domain registrar to the above.
       --output text \
       --query 'Stacks[*].Outputs[?OutputKey==`GitCloneUrlHttp`].[OutputValue]')
     echo git_clone_url_http=$git_clone_url_http
+
+
+### Pass your GitHub Repository parameters (if you are using a GitHub repository)
+
+Follow the steps [provided by GitHub](https://help.github.com/articles/creating-a-personal-access-token-for-the-command-line/) to create a OAuth token from GitHub and make sure to include the scopes [*repo* and *admin:repo_hook*](https://docs.aws.amazon.com/codepipeline/latest/userguide/troubleshooting.html#troubleshooting-gs2) . Copy this OAuth token.
+
+
+    SourceType = "GitHub"
+    BranchName = "master"
+    GithubRepoOwner = "yourgithubname"
+    GithubRepoName = "codepipeline-powered-static-website"
+    GithubOauthToken ="yourPastedOauthTokenFromStep2"
+    NotificationEmail = "your@email-address.com"
 
 ### Use Git
 

@@ -3,17 +3,16 @@ AWSTemplateFormatVersion: "2010-09-09"
 
 Description: |
   Static web site stack including:
-  * CodeCommit Git repository
+  * CodePipeline integrating:
+    * Source stage from either code-commit or github
+    * Build stage to run a buildspec (eg. upload the static website upon git commit)
   * S3 bucket for web site content
   * Redirect from "www." to base domain
   * Access logs written to logs bucket
   * ACM Certificate for SSL
   * CloudFront distributions for website https access
   * Route 53 hosted zone with DNS entries
-  * CodePipeline (source CodeCommit, invoke Lambda functions)
   * S3 bucket for CodePipeline artifacts
-  * AWS Lambda function(s) to generate static website from Git contents
-  * AWS Lambda function to copy generated website to website S3 bucket
   * SNS topic for CodeCommit Git change notifications
   * Email address subscribed to SNS notification topic
 
@@ -39,11 +38,11 @@ Parameters:
   DefaultTTL:
     Type: Number
     Description: "TTL in seconds"
-    Default: 30
+    Default: 50000
 
   MinimumTTL:
     Description: "Minimum cache lifetime in seconds for the CloudFront distribution"
-    Default: 5
+    Default: 60
     Type: Number
 
   PriceClass:
@@ -55,50 +54,39 @@ Parameters:
       - PriceClass_All
     Type: String
 
-  GeneratorLambdaFunctionS3Bucket:
-    Type: String
-    Description: "S3 bucket containing ZIP of AWS Lambda function (static site generator)"
-    Default: "run.alestic.com"
 
-  GeneratorLambdaFunctionS3Key:
+  SourceType:
+    Description: "CodeCommit | GitHub"
     Type: String
-    Description: "S3 key containing ZIP of AWS Lambda function (static site generator)"
-    Default: "lambda/aws-lambda-site-generator-identity.zip"
-
-  GeneratorLambdaFunctionRuntime:
-    Type: String
-    Description: "Runtime language for AWS Lambda function (static site generator)"
-    Default: "python2.7"
+    Default: "CodeCommit"
     AllowedValues:
-      - "python2.7"
-      - "nodejs"
-      - "nodejs4.3"
-      - "java8"
-
-  GeneratorLambdaFunctionHandler:
+      - CodeCommit
+      - GitHub
+  BranchName:
+    Description: "Name of branch to build from"
     Type: String
-    Description: "Function Handler for AWS Lambda function (static site generator)"
-    Default: "index.handler"
-
-  GeneratorLambdaFunctionUserParameters:
+    Default: master
+  GithubOauthToken:
     Type: String
-    Description: "User parameters for AWS Lambda function (static site generator)"
-    Default: "unused"
-    MinLength: 1
-    MaxLength: 1000
-
-  SyncLambdaFunctionS3Bucket:
+    NoEcho: true
+    Description: "For Github integrations this is necessary. Otherwise leave blank."
+  GithubRepoOwner:
     Type: String
-    Description: "S3 bucket containing ZIP of AWS Lambda function (sync to S3)"
-    Default: "run.alestic.com"
+    Description: "For Github integrations this is necessary. Otherwise leave blank."
 
-  SyncLambdaFunctionS3Key:
+  GithubRepoName:
     Type: String
-    Description: "S3 key containing ZIP of AWS Lambda function (sync to S3)"
-    Default: "lambda/aws-lambda-git-backed-static-website.zip"
+    Description: "For Github integrations this is necessary. Otherwise leave blank."
+
+
+
+  BuildEnvironmentImage:
+    Description: "Optional image to use for codebuild eg. docker:dind defaults to a ruby environment suitable for Jekyll builds."
+    Type: String
+    Default: "aws/codebuild/ruby:2.3.1"
 
   PreExistingGitRepository:
-    Description: "Optional Git repository name for pre-existing CodeCommit repository. Leave empty to have CodeCommit Repository created and managed by this stack."
+    Description: "Optional Git repository name for pre-existing git repository. Leave empty to have CodeCommit Repository created and managed by this stack."
     Type: String
     Default: ""
 
@@ -128,7 +116,8 @@ Parameters:
     Default: ""
 
 Conditions:
-  NeedsNewGitRepository: !Equals [!Ref PreExistingGitRepository, ""]
+  IsCodeCommit: !Equals [!Ref SourceType, "CodeCommit"]
+  NeedsNewGitRepository: !And [!Equals [!Ref PreExistingGitRepository, ""], !Equals [!Ref SourceType, "CodeCommit"]]
   NeedsNewHostedZone: !Equals [!Ref PreExistingHostedZoneDomain, ""]
   NeedsNewSiteBucket: !Equals [!Ref PreExistingSiteBucket, ""]
   NeedsNewRedirectBucket: !Equals [!Ref PreExistingRedirectBucket, ""]
@@ -154,12 +143,37 @@ Resources:
       AccessControl: PublicRead
       WebsiteConfiguration:
         IndexDocument: index.html
-        ErrorDocument: error.html
+        ErrorDocument: 404.html
       # logs.example.com/logs/s3/example.com/
       LoggingConfiguration:
         DestinationBucketName: !If [NeedsNewLogsBucket, !Ref LogsBucket, !Ref PreExistingLogsBucket]
         LogFilePrefix: !Sub "logs/s3/${DomainName}/"
     DeletionPolicy: Retain
+
+  # bucket policy to provide read access to assets in SiteBucket
+  SiteBucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    Properties: 
+      Bucket: !If [NeedsNewSiteBucket, !Ref SiteBucket, !Ref PreExistingSiteBucket]
+      PolicyDocument: 
+        Statement: 
+          -
+            Action: 
+              - "s3:GetObject"
+            Effect: "Allow"
+            Resource: 
+              - !Join ["", 
+                [
+                  "arn:aws:s3:::",
+                  !If [
+                    NeedsNewSiteBucket,
+                    !Ref SiteBucket,
+                    !Ref PreExistingSiteBucket
+                  ],
+                  "/*"
+                ],
+              ]
+            Principal: "*"
 
   # Bucket to redirect to example.com: www.example.com
   RedirectBucket:
@@ -328,21 +342,20 @@ Resources:
     DeletionPolicy: Retain
 
   # IAM info for AWS Lambda functions
-  LambdaExecutionRole:
+  CodeBuildExecutionRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
-        Version: '2012-10-17'
+        Version: "2012-10-17"
         Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - lambda.amazonaws.com
-            Action:
-              - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+          Action: sts:AssumeRole
+        Version: '2012-10-17'
       Path: "/"
       Policies:
-        - PolicyName: !Sub "${DomainName}-execution-policy"
+        - PolicyName: !Sub "${DomainName}-codebuild-policy"
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -351,56 +364,10 @@ Resources:
                 Resource: "arn:aws:logs:*:*:*"
               - Effect: Allow
                 Action:
-                  - codepipeline:PutJobSuccessResult
-                  - codepipeline:PutJobFailureResult
-                Resource: "*"
-              - Effect: Allow
-                Action:
-                  - s3:GetBucketLocation
-                  - s3:ListBucket
-                  - s3:ListBucketMultipartUploads
-                Resource:
-                  - !Join ["", ["arn:aws:s3:::", !If [NeedsNewSiteBucket, !Ref SiteBucket, !Ref PreExistingSiteBucket]]]
-                  - !Join ["", ["arn:aws:s3:::", !If [NeedsNewCodePipelineBucket, !Ref CodePipelineBucket, !Ref PreExistingCodePipelineBucket]]]
-              - Effect: Allow
-                Action:
-                  - s3:AbortMultipartUpload
-                  - s3:DeleteObject
-                  - s3:GetObject
-                  - s3:GetObjectAcl
-                  - s3:ListMultipartUploadParts
-                  - s3:PutObject
-                  - s3:PutObjectAcl
+                  - s3:*
                 Resource:
                   - !Join ["", ["arn:aws:s3:::", !If [NeedsNewSiteBucket, !Ref SiteBucket, !Ref PreExistingSiteBucket], "/*"]]
                   - !Join ["", ["arn:aws:s3:::", !If [NeedsNewCodePipelineBucket, !Ref CodePipelineBucket, !Ref PreExistingCodePipelineBucket], "/*"]]
-
-  GeneratorLambdaFunction:
-    Type: "AWS::Lambda::Function"
-    Properties:
-      Description: !Sub "Static site generator for ${DomainName}"
-      #TBD: Some static site generators might need more permissions
-      Role: !GetAtt LambdaExecutionRole.Arn
-      MemorySize: 1536
-      Timeout: 300
-      Runtime: !Ref GeneratorLambdaFunctionRuntime
-      Handler: !Ref GeneratorLambdaFunctionHandler
-      Code:
-        S3Bucket: !Ref GeneratorLambdaFunctionS3Bucket
-        S3Key: !Ref GeneratorLambdaFunctionS3Key
-
-  SyncLambdaFunction:
-    Type: "AWS::Lambda::Function"
-    Properties:
-      Description:  !Sub "Copy Git branch contents to S3 bucket for ${DomainName}"
-      Role: !GetAtt LambdaExecutionRole.Arn
-      MemorySize: 1536
-      Timeout: 300
-      Runtime: python2.7
-      Handler: index.handler
-      Code:
-        S3Bucket: !Ref SyncLambdaFunctionS3Bucket
-        S3Key: !Ref SyncLambdaFunctionS3Key
 
   # IAM info for CodePipeline
   CodePipelineRole:
@@ -412,7 +379,7 @@ Resources:
           - Effect: Allow
             Principal:
               Service:
-                - "lambda.amazonaws.com"
+                - "codebuild.amazonaws.com"
                 - "codepipeline.amazonaws.com"
             Action:
               - "sts:AssumeRole"
@@ -425,6 +392,29 @@ Resources:
               - Effect: "Allow"
                 Action: "*"
                 Resource: "*"
+
+  BuildCopySourceProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub BuildCopySource-${AWS::StackName}
+      Description: Build static site and copy to s3
+      ServiceRole: !GetAtt CodeBuildExecutionRole.Arn
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: !Ref BuildEnvironmentImage
+        EnvironmentVariables:
+          - Name: TARGET_S3_BUCKET
+            Value: !Join ["", ["s3://", !If [NeedsNewSiteBucket, !Ref SiteBucket, !Ref PreExistingSiteBucket]]]
+      Source:
+        Type: CODEPIPELINE
+      Artifacts:
+        Type: CODEPIPELINE
+      TimeoutInMinutes: 15
+      EncryptionKey: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/s3
+      Tags:
+        - Key: Name
+          Value: !Sub BuildCopySource-${AWS::StackName}
 
   # CodePipeline: Pass Git contents to AWS Lambda function on Git activity
   CodePipeline:
@@ -442,46 +432,37 @@ Resources:
             - Name: SourceAction
               ActionTypeId:
                 Category: Source
-                Owner: AWS
-                Provider: CodeCommit
+                Owner: !If [IsCodeCommit, "AWS", "ThirdParty"]
+                Provider: !Ref SourceType
                 Version: 1
               Configuration:
-                RepositoryName: !If [NeedsNewGitRepository, !Ref DomainName, !Ref PreExistingGitRepository]
-                BranchName: master
+                !If
+                - IsCodeCommit
+                - 
+                  RepositoryName: !If [NeedsNewGitRepository, !Ref DomainName, !Ref PreExistingGitRepository]
+                  BranchName: !Ref BranchName
+                -
+                  Owner: !Ref GithubRepoOwner
+                  Repo: !Ref GithubRepoName
+                  Branch: !Ref BranchName
+                  OAuthToken: !Ref GithubOauthToken
               OutputArtifacts:
                 - Name: SiteSource
               RunOrder: 1
-        - Name: InvokeGenerator
+        - Name: MakeWebsite
           Actions:
-            - Name: InvokeAction
+            - Name: Build
               InputArtifacts:
                 - Name: SiteSource
               ActionTypeId:
-                Category: Invoke
+                Category: Build
                 Owner: AWS
-                Provider: Lambda
                 Version: 1
+                Provider: CodeBuild
               Configuration:
-                FunctionName: !Ref GeneratorLambdaFunction
-                UserParameters: !Ref GeneratorLambdaFunctionUserParameters
-              OutputArtifacts:
-                - Name: SiteContent
+                ProjectName:
+                  Ref: BuildCopySourceProject
               RunOrder: 1
-        - Name: InvokeSync
-          Actions:
-            - Name: InvokeAction
-              InputArtifacts:
-                - Name: SiteContent
-              ActionTypeId:
-                Category: Invoke
-                Owner: AWS
-                Provider: Lambda
-                Version: 1
-              Configuration:
-                FunctionName: !Ref SyncLambdaFunction
-                UserParameters: !If [NeedsNewSiteBucket, !Ref SiteBucket, !Ref PreExistingSiteBucket]
-              RunOrder: 1
-
 Mappings:
   RegionMap:
     ap-northeast-1:
@@ -561,26 +542,25 @@ Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
-          default: Website and Git repository
+          default: Website
         Parameters:
           - DomainName
+      - Label:
+          default: Source Code Repository
+        Parameters:
+          - SourceType
+          - BranchName
+          - GithubRepoOwner
+          - GithubRepoName
+          - GithubOauthToken
       - Label:
           default: Git Activity
         Parameters:
           - NotificationEmail
       - Label:
-          default: AWS Lambda Function (static site generator)
+          default: CodeBuild
         Parameters:
-          - GeneratorLambdaFunctionS3Bucket
-          - GeneratorLambdaFunctionS3Key
-          - GeneratorLambdaFunctionRuntime
-          - GeneratorLambdaFunctionHandler
-          - GeneratorLambdaFunctionUserParameters
-      - Label:
-          default: AWS Lambda Function (Sync to S3)
-        Parameters:
-          - SyncLambdaFunctionS3Bucket
-          - SyncLambdaFunctionS3Key
+          - BuildEnvironmentImage
       - Label:
           default: CloudFront CDN
         Parameters:
