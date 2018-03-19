@@ -1,10 +1,10 @@
 
 # Code-pipeline powered static website serverless, and powered entirely by AWS
 
-This is a fork of Eric Hammond's great implementation for infrastructure to build static websites on s3: [aws-git-backed-static-website]: https://github.com/alestic/aws-git-backed-static-website.
+This is a fork of Eric Hammond's great implementation for infrastructure to build static websites on s3: [aws-git-backed-static-website](https://github.com/alestic/aws-git-backed-static-website).
 It has the following modifications:
 
-1. The approach uses lambda functions rather than AWS's CodeBuild service to generate the site and push it to production. We found that one of the lambda functions provided in the template did not work. (See [this github issue](https://github.com/alestic/aws-git-backed-static-website/issues/9) which seems to have since be resolved for more details.)
+1. The approach uses lambda functions rather than AWS's CodeBuild service to generate the site and push it to production. We found that one of the lambda functions provided in the template did not work (see [this github issue](https://github.com/alestic/aws-git-backed-static-website/issues/9), which seems to have since been resolved for more details).
 We replaced the lambda functions with a CodeBuild stage.
 
 2.  We also found that the permissions for S3 buckets created in the stack did not seem to allow the contents to be served publicly. We  therefore added a bucket policy to the S3 bucket.
@@ -46,14 +46,14 @@ Access logs for the website are stored in an S3 bucket.
 Benefits of this architecture include:
 
  - Trivial to launch - Can use aws-cli or AWS console (click "launch"
-   above)
+   above).
 
  - Maintenance-free - Amazon is responsible for managing all the
    services used.
 
  - Negligible cost at substantial traffic volume - Starts off as low
-   as $0.51 per month if running alone in a new AWS account. (Route 53
-   has no free tier.) Your cost may vary over time and if other
+   as $0.51 per month if running alone in a new AWS account (Route 53
+   has no free tier). Your cost may vary over time and if other
    resources are running in your AWS account.
 
  - Scales forever - No action is needed to support more web site
@@ -99,8 +99,6 @@ of these and place it at the root of your static site project. If you feel like 
 Fork  [our sample website source repository](https://github.com/elementryx/YAX-Coming-soon-Jekyll-codebuild-template) on GitHub or place the relevant buildspec.yml from the **buildspecs/** folder into your existing static website repository.
 
 **Step 2**:
-
-
 Follow the steps [provided by GitHub](https://help.github.com/articles/creating-a-personal-access-token-for-the-command-line/) to create a OAuth token from GitHub and make sure to include the scopes [*repo* and *admin:repo_hook*](https://docs.aws.amazon.com/codepipeline/latest/userguide/troubleshooting.html#troubleshooting-gs2) . Copy this OAuth token.
 
 **Step 3**:
